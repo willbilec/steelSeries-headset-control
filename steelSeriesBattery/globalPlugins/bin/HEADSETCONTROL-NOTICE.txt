@@ -1,0 +1,14 @@
+This add-on bundles headsetcontrol.exe from the HeadsetControl project.
+
+Project:
+https://github.com/Sapd/HeadsetControl
+
+Release used:
+3.1.0
+
+Purpose:
+The executable is used to read supported SteelSeries headset battery status directly on Windows
+without depending on SteelSeries GG's local HTTP services.
+
+License:
+See the upstream HeadsetControl license for full terms.
