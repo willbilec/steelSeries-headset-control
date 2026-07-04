@@ -541,30 +541,52 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     def _startup_apply_eq(self):
         """Apply saved EQ + hardware config after NVDA is fully loaded.
 
-        Waits for the device to be enumerated by headsetcontrol (bounded),
-        then pushes all four settings. The probe is intentionally lenient
-        (any device showing up is enough); each push has its own per-call
-        retry because the first SET after GG releases the HID interface can
-        transiently fail. Failures are announced audibly.
+        Probes the device (matching against 'device_count: 1' in the JSON
+        response) and pushes the four hardware settings. Uses
+        subprocess.check_output directly (like the cycle scripts) so a
+        successful exit code is sufficient — we don't have to parse the
+        human-readable 'Found 1 device' banner, and we add '-o json' for
+        the probe so the JSON parses cleanly.
         """
         exe = self._get_headsetcontrol_path()
         if not exe:
             return
 
-        # Wait up to ~20s for the device to be enumerated. We accept "the
-        # device is listed" as the readiness signal — a partial / error
-        # response from the very first -b call is common while GG finishes
-        # initializing, and the subsequent SET commands have their own
-        # retries below.
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
+        def _run(args, timeout=5):
+            """Run headsetcontrol, return True on exit-code 0."""
+            try:
+                subprocess.check_output(
+                    [exe] + args, text=True, startupinfo=si,
+                    stderr=subprocess.STDOUT, timeout=timeout,
+                )
+                return True
+            except Exception:
+                return False
+
+        # Probe: keep trying until headsetcontrol -b reports a device.
+        # We pass -o json so the response is parseable; we accept exit 0
+        # as readiness (covers the case where -b succeeds but battery
+        # data is briefly stale).
         deadline = time.time() + 20
-        probe = None
+        ready = False
         while time.time() < deadline:
-            probe = self._run_headsetcontrol([], timeout=3)
-            if probe is not None and probe.get("device_count", 0) >= 1:
-                break
+            try:
+                out = subprocess.check_output(
+                    [exe, "-b", "-o", "json"], text=True, startupinfo=si,
+                    stderr=subprocess.STDOUT, timeout=3,
+                )
+                data = json.loads(out)
+                if data.get("device_count", 0) >= 1:
+                    ready = True
+                    break
+            except Exception:
+                pass
             time.sleep(1)
 
-        if probe is None or probe.get("device_count", 0) < 1:
+        if not ready:
             announce(
                 "Headset not detected at startup. "
                 "If SteelSeries GG is running, close it or quit and retry. "
@@ -577,15 +599,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         def _push(label, args, retries=2):
             """Try to push a single command with bounded retries."""
             for attempt in range(retries + 1):
-                try:
-                    result = self._run_headsetcontrol(args)
-                    if result and any(
-                        a.get("status") == "success" for a in result.get("actions", [])
-                    ):
-                        announcements.append("{} restored.".format(label))
-                        return True
-                except Exception:
-                    pass
+                if _run(args):
+                    announcements.append("{} restored.".format(label))
+                    return True
                 if attempt < retries:
                     time.sleep(1)
             announcements.append("Failed to restore {}.".format(label))
