@@ -541,43 +541,54 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     def _startup_apply_eq(self):
         """Apply saved EQ + hardware config after NVDA is fully loaded.
 
-        Retries until the headset is responsive (bounded wait) instead of
-        sleeping a fixed interval. Each push is verified via the JSON
-        "status" field; failures are announced so silent firmware mismatches
-        are visible to the user.
+        Waits for the device to be enumerated by headsetcontrol (bounded),
+        then pushes all four settings. The probe is intentionally lenient
+        (any device showing up is enough); each push has its own per-call
+        retry because the first SET after GG releases the HID interface can
+        transiently fail. Failures are announced audibly.
         """
         exe = self._get_headsetcontrol_path()
         if not exe:
             return
 
-        # Wait up to ~15s for the headset to be ready. This is needed because
-        # the SteelSeries GG service may still be holding the HID interface
-        # when NVDA finishes initializing, and headsetcontrol will silently
-        # fail if called too early.
-        deadline = time.time() + 15
+        # Wait up to ~20s for the device to be enumerated. We accept "the
+        # device is listed" as the readiness signal — a partial / error
+        # response from the very first -b call is common while GG finishes
+        # initializing, and the subsequent SET commands have their own
+        # retries below.
+        deadline = time.time() + 20
+        probe = None
         while time.time() < deadline:
-            probe = self._run_headsetcontrol(["-b"], timeout=3)
-            if probe is not None:
-                devices = probe.get("devices", [])
-                if any(d.get("status") == "success" for d in devices):
-                    break
+            probe = self._run_headsetcontrol([], timeout=3)
+            if probe is not None and probe.get("device_count", 0) >= 1:
+                break
             time.sleep(1)
-        else:
-            announce("Headset not ready at startup; EQ settings not applied.")
+
+        if probe is None or probe.get("device_count", 0) < 1:
+            announce(
+                "Headset not detected at startup. "
+                "If SteelSeries GG is running, close it or quit and retry. "
+                "EQ settings not applied."
+            )
             return
 
         announcements = []
 
-        def _push(label, args):
-            """Try to push a single command. Returns True on success."""
-            try:
-                result = self._run_headsetcontrol(args)
-                if result and any(a.get("status") == "success" for a in result.get("actions", [])):
-                    announcements.append("{} restored.".format(label))
-                    return True
-                announcements.append("Failed to restore {}.".format(label))
-            except Exception:
-                announcements.append("Failed to restore {}.".format(label))
+        def _push(label, args, retries=2):
+            """Try to push a single command with bounded retries."""
+            for attempt in range(retries + 1):
+                try:
+                    result = self._run_headsetcontrol(args)
+                    if result and any(
+                        a.get("status") == "success" for a in result.get("actions", [])
+                    ):
+                        announcements.append("{} restored.".format(label))
+                        return True
+                except Exception:
+                    pass
+                if attempt < retries:
+                    time.sleep(1)
+            announcements.append("Failed to restore {}.".format(label))
             return False
 
         # 1) EQ
