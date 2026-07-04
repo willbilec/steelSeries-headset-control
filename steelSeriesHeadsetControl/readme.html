@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SteelSeries Headset Control</title>
+</head>
+<body>
+<h1>SteelSeries Headset Control</h1>
+<p>This NVDA add-on reports battery level and controls EQ settings for compatible SteelSeries headsets (tested with Arctis Nova 5).</p>
+
+<h2>Usage</h2>
+
+<h3>Battery</h3>
+<p>Press <strong>NVDA+Shift+A</strong> to hear the current battery level.</p>
+
+<h3>EQ Control Layer</h3>
+<p>Press <strong>NVDA+Shift+Q</strong> to enter the EQ layer. Then press a single key:</p>
+<ul>
+  <li><strong>S</strong> — Status: announce current EQ preset and curve</li>
+  <li><strong>A</strong> — Battery check</li>
+  <li><strong>1</strong> — Flat preset (no EQ)</li>
+  <li><strong>2</strong> — Bass preset (boosted low end)</li>
+  <li><strong>3</strong> — Focus preset (clarity for footsteps/gaming)</li>
+  <li><strong>4</strong> — Smiley preset (V-shaped curve)</li>
+  <li><strong>5</strong> — Heavy Bass preset (aggressive bass boost)</li>
+  <li><strong>C</strong> — Custom EQ dialog (10 sliders, -10 to +10 dB)</li>
+  <li><strong>Escape</strong> — Cancel / exit layer</li>
+</ul>
+<p>Any other key also cancels the layer. The layer auto-cancels after 5 seconds of inactivity.</p>
+
+<h3>Custom EQ (Direct)</h3>
+<p>Press <strong>NVDA+Shift+Ctrl+E</strong> to apply the custom 10-band EQ from the config file without entering the layer.</p>
+
+<h3>Custom EQ Dialog</h3>
+<p>Press <strong>C</strong> in the EQ layer to open a dialog with 10 sliders. Each slider controls one frequency band (32Hz–16kHz). Use Tab to move between sliders and arrow keys to adjust. Press Enter or click Apply to set the EQ.</p>
+
+<h3>Config File</h3>
+<p>Settings are saved to <code>steelSeriesBattery_eq.json</code> in your NVDA user configuration folder:</p>
+<pre>{
+  "preset": 1,
+  "custom_eq": [3.5, 5.5, 4.0, 1.0, -1.5, -1.5, -1.0, -1.0, -1.0, -1.0]
+}</pre>
+<p>The 10 values correspond to frequencies: 32Hz, 64Hz, 125Hz, 250Hz, 500Hz, 1kHz, 2kHz, 4kHz, 8kHz, 16kHz. Each value is in dB from -10 to +10 in 0.5 dB steps.</p>
+
+<h3>Auto-Apply on Startup</h3>
+<p>The add-on automatically applies the last-used EQ (preset or custom) when NVDA starts.</p>
+
+<h2>Notes</h2>
+<p>The add-on includes HeadsetControl for direct headset communication without relying on SteelSeries GG.</p>
+</body>
+</html>
