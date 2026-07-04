@@ -252,29 +252,42 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     # ═══════════════════════════════════════════════════════════
 
     def _load_eq_config(self):
-        """Load saved EQ config from JSON file."""
+        """Load saved EQ + hardware config from JSON file."""
         if not self._eq_config_path or not os.path.exists(self._eq_config_path):
             return
         try:
             with open(self._eq_config_path, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
             preset = cfg.get("preset", 0)
-            if isinstance(preset, int) and -1 <= preset <= 3:
+            if isinstance(preset, int) and -1 <= preset <= 4:
                 self._active_preset = preset
             custom = cfg.get("custom_eq")
             if isinstance(custom, list) and len(custom) == 10:
                 self._custom_eq = [float(v) for v in custom]
+            # --- Hardware settings: persist across NVDA restarts ---
+            sidetone = cfg.get("sidetone")
+            if isinstance(sidetone, int) and 0 <= sidetone <= 128:
+                self._sidetone_level = sidetone
+            mic = cfg.get("mic_volume")
+            if isinstance(mic, int) and 0 <= mic <= 128:
+                self._mic_volume = mic
+            inactive = cfg.get("inactive_time")
+            if isinstance(inactive, int) and 0 <= inactive <= 90:
+                self._inactive_time = inactive
         except Exception:
             pass
 
     def _save_eq_config(self):
-        """Save current EQ config to JSON file."""
+        """Save current EQ + hardware config to JSON file."""
         if not self._eq_config_path:
             return
         try:
             cfg = {
                 "preset": self._active_preset,
                 "custom_eq": self._custom_eq,
+                "sidetone": self._sidetone_level,
+                "mic_volume": self._mic_volume,
+                "inactive_time": self._inactive_time,
             }
             with open(self._eq_config_path, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=2)
@@ -526,22 +539,70 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             announce("EQ: Custom. {}".format(bands_desc))
 
     def _startup_apply_eq(self):
-        """Apply saved EQ after NVDA is fully loaded (daemon thread)."""
-        time.sleep(3)
-        try:
-            if self._active_preset >= 0:
-                name = PRESET_NAMES[self._active_preset]
-                values = PRESET_VALUES[name.lower()]
-                if self._active_preset <= 3:
-                    self._run_headsetcontrol(["-p", str(self._active_preset)])
-                else:
-                    eq_str = " ".join(str(v) for v in values)
-                    self._run_headsetcontrol(["-e", eq_str])
-            else:
-                eq_str = " ".join(str(v) for v in self._custom_eq)
-                self._run_headsetcontrol(["-e", eq_str])
-        except Exception:
-            pass
+        """Apply saved EQ + hardware config after NVDA is fully loaded.
+
+        Retries until the headset is responsive (bounded wait) instead of
+        sleeping a fixed interval. Each push is verified via the JSON
+        "status" field; failures are announced so silent firmware mismatches
+        are visible to the user.
+        """
+        exe = self._get_headsetcontrol_path()
+        if not exe:
+            return
+
+        # Wait up to ~15s for the headset to be ready. This is needed because
+        # the SteelSeries GG service may still be holding the HID interface
+        # when NVDA finishes initializing, and headsetcontrol will silently
+        # fail if called too early.
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            probe = self._run_headsetcontrol(["-b"], timeout=3)
+            if probe is not None:
+                devices = probe.get("devices", [])
+                if any(d.get("status") == "success" for d in devices):
+                    break
+            time.sleep(1)
+        else:
+            announce("Headset not ready at startup; EQ settings not applied.")
+            return
+
+        announcements = []
+
+        def _push(label, args):
+            """Try to push a single command. Returns True on success."""
+            try:
+                result = self._run_headsetcontrol(args)
+                if result and any(a.get("status") == "success" for a in result.get("actions", [])):
+                    announcements.append("{} restored.".format(label))
+                    return True
+                announcements.append("Failed to restore {}.".format(label))
+            except Exception:
+                announcements.append("Failed to restore {}.".format(label))
+            return False
+
+        # 1) EQ
+        if self._active_preset >= 0 and self._active_preset <= 3:
+            name = PRESET_NAMES[self._active_preset]
+            _push("EQ: {} preset".format(name), ["-p", str(self._active_preset)])
+        elif self._active_preset == 4:
+            values = PRESET_VALUES["heavy bass"]
+            eq_str = " ".join(str(v) for v in values)
+            _push("EQ: Heavy Bass preset", ["-e", eq_str])
+        else:
+            eq_str = " ".join(str(v) for v in self._custom_eq)
+            _push("EQ: Custom", ["-e", eq_str])
+
+        # 2) Sidetone
+        _push("Sidetone: {}".format(self._sidetone_level), ["-s", str(self._sidetone_level)])
+
+        # 3) Microphone volume
+        _push("Mic volume: {}".format(self._mic_volume), ["--microphone-volume", str(self._mic_volume)])
+
+        # 4) Inactive time
+        _push("Auto-off: {} min".format(self._inactive_time), ["-i", str(self._inactive_time)])
+
+        for msg in announcements:
+            announce(msg)
 
     # ═══════════════════════════════════════════════════════════
     #  Battery (existing functionality — unchanged)
@@ -948,6 +1009,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
                                     text=True, startupinfo=startupinfo,
                                     stderr=subprocess.STDOUT, timeout=5)
             self._sidetone_level = new_level
+            self._save_eq_config()
             self._reset_layer_timer()
             announce("Sidetone: {}".format(name))
         except Exception:
@@ -983,6 +1045,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
                                     text=True, startupinfo=startupinfo,
                                     stderr=subprocess.STDOUT, timeout=5)
             self._mic_volume = new_level
+            self._save_eq_config()
             self._reset_layer_timer()
             announce("Mic volume: {}".format(name))
         except Exception:
@@ -1014,6 +1077,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
                                     text=True, startupinfo=startupinfo,
                                     stderr=subprocess.STDOUT, timeout=5)
             self._inactive_time = new_time
+            self._save_eq_config()
             self._reset_layer_timer()
             announce("Auto-off: {}".format(name))
         except Exception:
